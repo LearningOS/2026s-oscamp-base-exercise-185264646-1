@@ -115,11 +115,44 @@ unsafe impl GlobalAlloc for FreeListAllocator {
         // - Check if curr address satisfies align, and (*curr).size >= size
         // - If found, remove it from the list (update prev's next or the free_list head)
         // - Return curr as *mut u8
+        let mut curr = self.free_list_head();
+        let mut prev: *mut FreeBlock = null_mut();
+        while !curr.is_null() {
+            let pre_padding = curr as usize - (curr as usize & !(align - 1));
+            if (*curr).size - pre_padding >= size {
+                // remove curr and use it
+                if (prev.is_null()) {
+                    self.set_free_list_head(null_mut());
+                } else {
+                    (*prev).next = (*curr).next;
+                }
+
+                return curr as *mut u8;
+            }
+
+            prev = curr;
+            curr = (*curr).next;
+        }
 
         // TODO: Step 2 — no suitable block in free_list, allocate from bump region
         //
         // Same logic as 02_bump_allocator's alloc
-        todo!()
+        loop {
+            let next = self.bump_next.load(core::sync::atomic::Ordering::SeqCst);
+            let align = layout.align();
+            let aligned = (next + align - 1) & !(align - 1);
+            let end = aligned + layout.size();
+            if end > self.heap_end {
+                return null_mut();
+            }
+            let rs = self.bump_next.compare_exchange(next,
+                end,
+                core::sync::atomic::Ordering::SeqCst,
+                core::sync::atomic::Ordering::Acquire);
+            if rs.is_ok() {
+                return aligned as *mut u8;
+            }
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
@@ -131,7 +164,10 @@ unsafe impl GlobalAlloc for FreeListAllocator {
         // 1. Cast ptr to *mut FreeBlock
         // 2. Write FreeBlock { size, next: current list head }
         // 3. Update free_list head to ptr
-        todo!()
+        let ptr = ptr as *mut FreeBlock;
+        (*ptr).next = self.free_list_head();
+        (*ptr).size = layout.size();
+        self.set_free_list_head(ptr);
     }
 }
 
