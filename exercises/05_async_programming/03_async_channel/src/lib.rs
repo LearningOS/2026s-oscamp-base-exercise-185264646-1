@@ -8,6 +8,7 @@
 //! - Channel closing mechanism (receiver returns None after all senders are dropped)
 
 use tokio::sync::mpsc;
+use tokio::join;
 
 /// Async producer-consumer:
 /// - Create a producer task that sends each element from items sequentially
@@ -19,7 +20,24 @@ pub async fn producer_consumer(items: Vec<String>) -> Vec<String> {
     // TODO: Spawn producer task: iterate through items, send each one
     // TODO: Spawn consumer task: loop recv until channel closes, collect results
     // TODO: Wait for consumer to complete and return results
-    todo!()
+    let (tx, mut rx) = mpsc::channel(1);
+    // spawn producer task
+    let producer_task = tokio::spawn(async move {
+        for msg in items {
+            tx.send(msg).await;
+        }
+    });
+
+    let receiver_task = tokio::spawn(async move {
+        let mut result = vec![];
+        while let Some(msg) = rx.recv().await {
+            result.push(msg);
+        }
+
+        result
+    });
+
+    join!(producer_task, receiver_task).1.unwrap()
 }
 
 /// Fan‑in pattern: multiple producers, one consumer.
@@ -31,7 +49,26 @@ pub async fn fan_in(n_producers: usize) -> Vec<String> {
     //       Each sends format!("producer {id}: message")
     // TODO: Drop the original sender (important! otherwise channel won't close)
     // TODO: Consumer loops receiving, collects and sorts
-    todo!()
+    let (tx, mut rx) = mpsc::channel(n_producers);
+    let mut results = vec![];
+
+    let join_set: tokio::task::JoinSet<_> = (0..n_producers).map(|i| {
+        let tx_clone = tx.clone();
+        async move {
+            tx_clone.send(String::from(format!("producer {i}: message"))).await;
+        }
+    }).collect();
+
+    drop(tx);
+    join_set.join_all().await;
+
+    while let Some(msg) = rx.recv().await {
+        results.push(msg);
+    }
+
+    results.sort();
+
+    results
 }
 
 #[cfg(test)]
